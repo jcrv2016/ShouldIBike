@@ -240,8 +240,9 @@ class Weather(object):
         if (fileOpened):
             self.historicAvgTemp = float(self.weatherlist[self.elapsedDays][1])
             self.avgDifference = self.avgTemp - self.historicAvgTemp
+            #int(self.avgDifference)
 
-            if (-5 >= self.avgDifference <= 5):
+            if (-5 < self.avgDifference < 5):
                 self.seasonable = True
                 self.unseasonablyWarm = False
                 self.unseasonablyCold = False
@@ -539,7 +540,7 @@ class Tweet(object):
         self.updateStatus()     
         self.printTweet()
         self.followBack()
-        self.log()     
+        self.log()
     def schedulePublish(self, time1):
         schedule.every().day.at(time1).do(self.publish)
         print("\nWaiting for scheduled time (" + str(time1) + ")...\n")     
@@ -647,7 +648,7 @@ tomorrowWeather = Weather([40.713, -74.006], "LGA", "17:30", 1)
 
 #This program currently is run via an external task scheduler every day, and terminates after the second tweet.
 currentTime = datetime.now(pytz.timezone('US/Eastern'))
-while (currentTime.hour < 18):
+while (currentTime.hour < 20):
             schedule.run_pending()
             time.sleep(20) # wait 20 sec
             currentTime = datetime.now(pytz.timezone('US/Eastern'))
