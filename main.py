@@ -1,6 +1,5 @@
-﻿import csv, datetime, json, math, os, pyowm, pytz, schedule, subprocess, sys, threading, time, tweepy, urllib.request
-import xml.etree.ElementTree as ET
-import numpy as np
+﻿import csv, datetime, json, math, os, pyowm, pytz, schedule, subprocess, sys, time, tweepy, urllib.request
+import xml.etree.ElementTree as ETs
 from credentials import *
 from datetime import datetime, timedelta
 
@@ -647,6 +646,7 @@ tomorrowWeather = Weather([40.713, -74.006], "LGA", "17:30", 1)
 
 #maybe should implement separate URLhandler class, with pingtest, parseJSON, and others
 
+#This program currently is run via an external task scheduler every day, and terminates after the second tweet.
 currentTime = datetime.now(pytz.timezone('US/Eastern'))
 while (currentTime.hour < 18):
             schedule.run_pending()
