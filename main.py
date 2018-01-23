@@ -1,5 +1,5 @@
 ﻿import csv, datetime, json, math, os, pyowm, pytz, schedule, subprocess, sys, time, tweepy, urllib.request
-import xml.etree.ElementTree as ETs
+import xml.etree.ElementTree as ET
 from credentials import *
 from datetime import datetime, timedelta
 
@@ -97,7 +97,6 @@ class Weather(object):
             roads = RoadConditions()
             self.winterRoadConditions = roads.text
             self.snowy, self.wet = roads.snowy, roads.wet
-            #self.wet = roads.wet
         self.interpretWeatherCode()
         self.isSeasonable()
         self.interpretTemp()
@@ -640,7 +639,7 @@ class RoadConditions(object):
             else:
                 self.text += "dry"   
 
-currentWeather = Weather([40.713, -74.006], "LGA", "7:30")
+currentWeather = Weather([40.713, -74.006], "LGA", "7:15")
 #there should be a separate function for AM Tweet and PM Tweet
 tomorrowWeather = Weather([40.713, -74.006], "LGA", "17:30", 1)
 
