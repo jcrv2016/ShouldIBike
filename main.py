@@ -61,8 +61,8 @@ class Weather(object):
         self.avgTemp = 0
         self.avgCommuteTemp = 0
         self.seasonable = False
-        self.unseasonablyWarm = True
-        self.unseasonablyCold = True
+        self.unseasonablyWarm = False
+        self.unseasonablyCold = False
         self.weatherlist = []
         self.elapsedDays = 0
         #weatherCodes
@@ -240,18 +240,19 @@ class Weather(object):
         if (fileOpened):
             self.historicAvgTemp = float(self.weatherlist[self.elapsedDays][1])
             self.avgDifference = self.avgTemp - self.historicAvgTemp
-            #int(self.avgDifference)
 
             if (-5 < self.avgDifference < 5):
                 self.seasonable = True
-                self.unseasonablyWarm = False
-                self.unseasonablyCold = False
             else:
                 self.seasonable = False
                 if (self.avgDifference >= 5):
                     self.unseasonablyWarm = True
                 else:                       
                     self.unseasonablyCold = True 
+            
+            #print("self.seasonable" + str(self.seasonable), "self.unseasonablyWarm" + str(self.unseasonablyWarm), "self.unseasonablyCold" + str(self.unseasonablyCold), "self.avgDifference"+ str(self.avgDifference), "self.avgCommuteTemp" + str(self.avgCommuteTemp), "self.avgTemp" + str(self.avgTemp))
+            
+
         else:
             self.seasonable = True
             self.unseasonablyWarm = False
@@ -309,6 +310,7 @@ class Weather(object):
                     self.weatherEmoji = "🚴🌡️"
                 else:
                     self.rating = "MAYBE"
+                    self.rating2 = "; Be prepared for cold"
                     self.weatherEmoji = "⛄❄️"
         elif (self.tempStatus == "brisk"): 
             if (self.rain):
@@ -539,7 +541,7 @@ class Tweet(object):
             self.formTweet()
         self.updateStatus()     
         self.printTweet()
-        self.followBack()
+        #self.followBack()
         self.log()
     def schedulePublish(self, time1):
         schedule.every().day.at(time1).do(self.publish)
@@ -641,14 +643,14 @@ class RoadConditions(object):
                 self.text += "dry"   
 
 currentWeather = Weather([40.713, -74.006], "LGA", "7:15")
-#there should be a separate function for AM Tweet and PM Tweet
+#maybe there should be a separate function for AM Tweet and PM Tweet
 tomorrowWeather = Weather([40.713, -74.006], "LGA", "17:30", 1)
 
 #maybe should implement separate URLhandler class, with pingtest, parseJSON, and others
 
 #This program currently is run via an external task scheduler every day, and terminates after the second tweet.
 currentTime = datetime.now(pytz.timezone('US/Eastern'))
-while (currentTime.hour < 20):
+while (currentTime.hour < 18):
             schedule.run_pending()
             time.sleep(20) # wait 20 sec
             currentTime = datetime.now(pytz.timezone('US/Eastern'))
