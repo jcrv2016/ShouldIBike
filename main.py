@@ -1,11 +1,43 @@
-﻿import csv, datetime, json, math, os, pyowm, pytz, schedule, subprocess, sys, time, tweepy, urllib.request
-import xml.etree.ElementTree as ET
+﻿import csv, datetime, json, math, os, pyowm, pytz, requests, schedule, subprocess, sys, time, tweepy 
+#Original Modules, please make sure they're in right dir and importable
+import pyowm_weathercodes as wc
+import Subway, RoadConditions, SunTimes
+from Images import Image, Images
+#This contains the API keys
 from credentials import *
 from datetime import datetime, timedelta
 
+#This program currently is run via an external task scheduler every day, and terminates after the second tweet.
+
+#Global, easy to find VIP variables
+LOGPATH = "C:\\shouldibike\\templog.csv"
+GPSLOCATION = [40.79, -73.96]
+#[numeric end month of possible winter conditions, numeric start of possible winter conditions]. Define both as 0 if winter conditions are nonexistent in locale.
+WINTERMONTHS = [4,10] 
+AMTWEETTIME = "07:30"
+PMTWEETTIME = "17:00"
+PUBLISH = True
+AIRPORT = "LGA"
+EXITTIME = 23
+SEASONABLE_CSV_PATH = 'C:\\shouldibike\\nycavgweather.csv'
+#IMAGES_TO_PULL = [Image("https://511ny.org/map/Cctv/4616495--17", "BkBr", "Brooklyn Bridge Path"),Image("https://511ny.org/map/Cctv/4616600--17#1550452163802.jpg", "MhnBr2", "Manhattan Bridge Path"), Image("http://207.251.86.238/cctv969.jpg?rand=0.4881279622135668", "wbbBr", "Williamsburg Bridge Path (right side of img)")]
+IMAGES_TO_PULL = [Image("http://207.251.86.238/324", "MhnBrEntr", "Manhattan Bridge Entrance"),Image("http://207.251.86.238/cctv14.jpg", "BKBr3", "Brooklyn Bridge Path"), Image("http://207.251.86.238/cctv969.jpg?rand=0.4881279622135668", "wbbBr", "Williamsburg Bridge Path (right side of img)")]
+#207.251.86.238/cctv324.jpg
+"""
+model - call TimeKeeper*Singleton* to count time
+            TweetJob (create payload and schedule)  ->  
+                TimeKeeper.Schedule() 
+                Forecaster() -> 
+                Weather ->
+                    Weather.update()
+                    Recommendation (new)
+            TweetPublisher*Singleton* to publish
+            ExternalConnection*Singleton* - pingTest and APIConnect    
+
+"""
 class Weather(object):
-    def __init__(self, location, airport, tweetTime, day=-1):
-        #parameters
+    def __init__(self, location, airport, day=-1):
+        #mandatory parameters
         self.location = location
         self.airport = airport
         #misc
@@ -13,20 +45,19 @@ class Weather(object):
         #rain-related attributes
         self.littleRain = False
         self.someRain = False
-        self.rainTweet = ""
-        self.minorRain = False
+        self.rainText = ""
         self.rain = False
         #snow-related attributes
         self.littleSnow = False
         self.snowTweet = ""
         self.someSnow = False
-        self.minorRain = False
         self.winterRoadConditions = ""
-        self.wet = False
+        self.wet = False #this belongs here? check
         self.snowy = False
         self.snow = False
-        #if it's November to April, set flag for potential winter conditions 
-        if (10 > datetime.now().month > 5):
+        #if current month is within previously defined WINTERMONTHS range, set flag for potential winter conditions
+        #i feel like there is a less verbose way to do this
+        if (WINTERMONTHS[1] > datetime.now().month > WINTERMONTHS[0]):
             self.winter = False
         else:
             self.winter = True
@@ -35,18 +66,25 @@ class Weather(object):
         self.windString = ""
         self.weatherReading = ""
         self.weatherStatus = "undeclared"
-        self.rating = ""
-        self.rating2 = "" 
         self.forecastTime = datetime.utcnow()
         self.today = True
+        print(str(self.forecastTime))
         if(day!=-1):
-            #increment days
-            incrementedDays = int(day)
+            #'day == -1' Tweet is for today. Otherwise, increment days
+            #Should just be 0
+            incrementedDays = int(day) #is it necessary to cast as an int?
             self.today = False
             self.forecastTime = datetime.now() + timedelta(days=incrementedDays)
             self.forecastTime = datetime(self.forecastTime.year, self.forecastTime.month, self.forecastTime.day, 
                                        6, 0, 0, 0,tzinfo=pytz.timezone('US/Eastern'))
-        self.owm = pyowm.OWM(OWM_KEY)
+        else:
+            
+            self.forecasttime = datetime(self.forecastTime.year, self.forecastTime.month, self.forecastTime.day, self.forecastTime.hour, 0,0,0, tzinfo=pytz.timezone('US/Eastern'))
+            self.forecastTime += timedelta(hours=6)
+            #error will be thrown without 6 hour incrementation - it was tested, and this was the minimum 
+            #incrementation that could be used, without an error. ¯\_(ツ)_/¯
+            #actually, i am testing with 3 hours. update: failed
+        self.dayofWeek = self.dayOfWeek()
         #temperatures
         self.mornTemp = 0
         self.eveTemp = 0
@@ -65,49 +103,47 @@ class Weather(object):
         self.unseasonablyCold = False
         self.weatherlist = []
         self.elapsedDays = 0
-        #weatherCodes
-        self.rainCodes = ["rain", 200, 201, 202, 210, 211, 212, 221, 230, 231, 232, 302, 312, 313, 314, 501, 502, 503, 504, 511, 522, 531, 901, 906, 960]
-        self.lightRainCodes = ["light rain", 300, 301, 302, 310, 311, 321, 500, 520, 521, 701]
-        self.snowyCodes = ["snowy", 600, 601, 602, 611, 612, 615, 616, 620, 621, 622]
-        self.limitedVisibilityCodes = ["limited visiblity", 711, 721, 731, 751, 761, 762]
-        self.clearCodes = ["clear", 741, 800, 801, 802, 803, 804, 951, 952, 953]
-        self.extremeWeatherCodes = ["extreme weather", 771, 781, 900, 902, 959, 961, 962]
-        self.frigidCodes = ["frigid", 903]
-        self.veryHotCodes = ["very hot", 904]
-        self.windyCodes = ["windy", 905, 954, 955, 956, 957, 958]
-        self.hailCodes = ["hail", 906]
-        self.weathers = [self.rainCodes, self.lightRainCodes, self.snowyCodes, self.limitedVisibilityCodes, self.clearCodes, 
-                         self.extremeWeatherCodes, self.frigidCodes, self.veryHotCodes, self.windyCodes, self.hailCodes]
-        #initialize tweet object
-        self.messsage = Tweet(self, tweetTime)
+        self.update()
  
-    def updateWeather(self):
+    def update(self): 
         #main weather pull function
-        self.Forecaster = self.owm.daily_forecast_at_coords(self.location[0], self.location[1])
-        if (self.today):
-            self.forecast = self.Forecaster.get_forecast() #return list of Weather objects
-            self.weatherReading = self.forecast.get(0) #get current Weather
-        else:
-            self.weatherReading = self.Forecaster.get_weather_at(self.forecastTime)
+        tryCount = 0
+        successful = False
+        print("Pulling weather for " + str(self.forecastTime))
+        print("Current time is " + str(datetime.utcnow()))
+        while not successful and tryCount < 20:
+            try:
+                self.owm = ExternalConnection.getInstance().returnOWMConnection()
+                self.Forecaster = self.owm.daily_forecast_at_coords(self.location[0], self.location[1])
+                self.weatherReading = self.Forecaster.get_weather_at(self.forecastTime)
+                successful = True
+            except:
+                tryCount += 1
+                print("Try failed on attempt " + str(tryCount) + ".")
+        if tryCount >= 20:
+            print("\nCannot connect to pyOWM API. Exiting")
+            exit()
         self.getWind()
         self.getTemp()
         self.getRain()
         self.getSnow()
+        self.getSunTimes()
         if (self.winter and self.today):
-            roads = RoadConditions()
+            roads = RoadConditions.RoadConditions()
             self.winterRoadConditions = roads.text
             self.snowy, self.wet = roads.snowy, roads.wet
         self.interpretWeatherCode()
         self.isSeasonable()
         self.interpretTemp()
-        self.makeRecommendation()
-        self.recommendAttire()
-        suntimes = SunTimes(self)
-        self.sunriseTime, self.sunsetTime = suntimes.getSunTimes()
-
-    def mmtoIn(self, mm):
+       
+        
+    def mmToIn(self, mm):
         mm *= 0.0393701
         return mm
+
+    def getSunTimes(self):
+        suntimes = SunTimes.SunTimes(self)
+        self.sunriseTime, self.sunsetTime = suntimes.getSunTimes()
 
     def getSnow(self):
         if (self.winter):
@@ -116,13 +152,11 @@ class Weather(object):
                 if 'all' in snow:
                     snowStatus = snow['all']
                     if (snowStatus >= 2.5):
-                        if (snowStatus < 3.8):
-                            self.minorSnow = True
-                        snowStatus = self.mmtoIn(snowStatus)
+                        snowStatus = self.mmToIn(snowStatus)
                         snowStatus = "{:.1f}".format(snowStatus) 
                         self.snowTweet = snowStatus + '" snow'
                         self.someSnow = True
-                    elif (0 < snowStatus < 2.5):
+                    else:
                         self.littleSnow = True
             else: 
                 self.littleSnow = True
@@ -145,39 +179,39 @@ class Weather(object):
         self.hiTemp = temperature['max']
         self.loTemp = temperature['min']
         self.avgTemp = ((self.hiTemp + self.loTemp)/2)
-        self.avgCommuteTemp = ((self.mornTemp + self.eveTemp)/2)    
+        self.avgCommuteTemp = ((self.mornTemp + self.eveTemp)/2)
         
     def getRain(self):
         if (self.weatherReading.get_rain()): 
             rain = self.weatherReading.get_rain() 
             if ('all' in rain):
                 rainStatus = rain['all']
-                if (rainStatus >= 2.5):
-                    if (rainStatus < 3.8):
-                        self.minorRain = True
-                    rainStatus = self.mmtoIn(rainStatus)
-                    rainStatus = format(rainStatus, '.1f')
-                    self.rainTweet = rainStatus + '" rain'
+                rainCutoff = 7.62
+                if (rainStatus > rainCutoff):
+                    self.rainText = format(self.mmToIn(rainStatus), '.1f') + '" rain'
                     self.someRain = True
-                elif (rainStatus > 0 < 2.5):
+                    self.rain = True         
+                else:
                     self.littleRain = True
+                    self.rain = False
         else: 
             self.littleRain = True
-            self.rainTweet = "no rain"
+            self.rainText = "no rain"
+            self.rain = False
       
     def interpretWeatherCode(self):
         #pull weather code and make human-readable
-        #listing of weather codes is here:https:  //openweathermap.org/weather-conditions
+        #listing of weather codes is here: https://openweathermap.org/weather-conditions
         #future changes:
         #sunny would be more descriptive than clear in applicable cases
         #make it so "frigid" or "very hot" in weatherStatus can't be posted alongside "frigid" or "very hot" in tempStatus
         
         self.weatherCode = self.weatherReading.get_weather_code()
 
-        for i in range(len(self.weathers)):
-            for x in range(len(self.weathers[i])):
-                if (self.weatherCode == self.weathers[i][x]):
-                    self.weatherStatus = self.weathers[i][0]
+        for i in range(len(wc.weathers)):
+            for x in range(len(wc.weathers[i])):
+                if (self.weatherCode == wc.weathers[i][x]):
+                    self.weatherStatus = wc.weathers[i][0]
                     break
                 else:
                     continue                  
@@ -185,10 +219,11 @@ class Weather(object):
         if (self.weatherStatus in ["rain", "light rain", "hail"]):
            if (self.littleRain):
                 self.weatherStatus = "trace rain"
+                self.rain = False
            else:
                 self.rain = True
        
-        if (self.weatherStatus == "snowy"):
+        if (self.weatherStatus == "snow"):
            if (self.littleSnow):
                 self.weatherStatus = "flurries"
            else:
@@ -203,9 +238,9 @@ class Weather(object):
             self.tempStatus = "cold"
         elif (41 <= self.avgCommuteTemp < 52):
             self.tempStatus = "brisk"
-        elif (52 <= self.avgCommuteTemp < 64):
+        elif (52 <= self.avgCommuteTemp < 65):
             self.tempStatus = "mild"
-        elif (64 <= self.avgCommuteTemp < 74):
+        elif (65 <= self.avgCommuteTemp < 74):
             self.tempStatus = "pleasant temps"
         elif (74 <= self.avgCommuteTemp < 84):
             self.tempStatus = "warm"
@@ -223,13 +258,23 @@ class Weather(object):
         if self.elapsedDays >= 365:
             self.elapsedDays == 364
 
+    def dayOfWeek(self):
+        dayMapLong = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        dayMapShort = ["Mon", "Tues", "Wed", "Thurs", "Fri", "Sat", "Sun"]
+        self.dayofWeek = {}
+        self.dayofWeek["short"] = dayMapShort[self.forecastTime.weekday()]
+        self.dayofWeek["long"] = dayMapLong[self.forecastTime.weekday()]
+        return self.dayofWeek
+
+
     def isSeasonable(self):
-        path = 'C:\\shouldibike\\nycavgweather.csv'
         fileOpened = True
+        seasonable = [-5, 5] #Set range of what a seasonable temp variance is. This is just my opinion
         self.getElapsedDays()
         if not (self.weatherlist): 
+            #external file reader func here? where located tho?
             try:
-                with open(path, 'r') as csvfile:
+                with open(SEASONABLE_CSV_PATH, 'r') as csvfile:
                     reader=csv.reader(csvfile)
                     for row in reader:
                         self.weatherlist.append(row)
@@ -241,264 +286,355 @@ class Weather(object):
             self.historicAvgTemp = float(self.weatherlist[self.elapsedDays][1])
             self.avgDifference = self.avgTemp - self.historicAvgTemp
 
-            if (-5 < self.avgDifference < 5):
+            if (seasonable[0] < self.avgDifference < seasonable[1]):
                 self.seasonable = True
             else:
                 self.seasonable = False
-                if (self.avgDifference >= 5):
+                if (self.avgDifference >= seasonable[1]):
                     self.unseasonablyWarm = True
                 else:                       
                     self.unseasonablyCold = True 
-            
-            #print("self.seasonable" + str(self.seasonable), "self.unseasonablyWarm" + str(self.unseasonablyWarm), "self.unseasonablyCold" + str(self.unseasonablyCold), "self.avgDifference"+ str(self.avgDifference), "self.avgCommuteTemp" + str(self.avgCommuteTemp), "self.avgTemp" + str(self.avgTemp))
-            
-
         else:
             self.seasonable = True
             self.unseasonablyWarm = False
             self.unseasonablyCold = False
 
+class Recommendation(object):
+    def __init__(self, weatherObj):
+        self.weatherObj = weatherObj
+        self.rating = ""
+        self.rating2 = ""
+        self.weatherEmoji = ""
+        self.attire = ""
+        self.weatherObj.update()
+        self.makeRecommendation()
+        self.recommendAttire()
+    def makeRecommendation(self):
+        # this could be a more maintainable and readable lookup matrix somehow
+        if (self.weatherObj.snow):
+            self.rating = "POOR"
+            if (self.weatherObj.rain):
+                self.rating2 = "; Be prepared for snow/rain"
+            else:
+                self.rating2 = "; Be prepared for snow"
+            self.weatherEmoji = "⛄❄️"
+        elif (self.weatherObj.snowy):
+            self.rating = "POOR"
+            self.rating2 = "; Roads are likely messy"
+            self.weatherEmoji = "⛄❄️"
+        elif (self.weatherObj.weatherStatus in ["extreme weather"]):
+            self.rating = "POOR"
+            self.weatherEmoji = "⚡❕"
+        elif (self.weatherObj.tempStatus == "bitter cold"):
+            self.rating = "POOR"
+            self.rating2 = "; Only for diehards"
+            self.weatherEmoji = "⛄❄️"
+        elif (self.weatherObj.tempStatus in ["cold", "frigid"]):
+            if (self.weatherObj.rain):
+                self.rating = "POOR"
+                self.rating2 = "; Be prepared for rain"
+                self.weatherEmoji = "⛄❄️"
+            else:
+                if (self.weatherObj.unseasonablyWarm and self.weatherObj.weatherStatus != "frigid"):
+                    self.rating = "PROBABLY"
+                    self.rating2 = "; Enjoy the warmth"
+                    self.weatherEmoji = "🚴🌡️"
+                else:
+                    self.rating = "MODERATE"
+                    self.rating2 = "; Be prepared for cold"
+                    self.weatherEmoji = "⛄❄️"
+        elif (self.weatherObj.tempStatus == "brisk"): 
+            if (self.weatherObj.rain):
+                self.rating = "POOR"
+                self.rating2 = "; Be prepared for rain"
+                self.weatherEmoji = "🌧️☔"
+            else:
+                if (self.weatherObj.windy or self.weatherObj.weatherStatus == "windy"):
+                    self.rating = "MODERATE"
+                    self.rating2 = "; It's windy"
+                    self.weatherEmoji = "🌬️"
+                else:
+                    self.rating = "OPTIMAL"
+                    self.rating2 = ", you should"
+                    self.weatherEmoji = "🚴👍"
+        elif (self.weatherObj.tempStatus in ["mild"]):
+            if (self.weatherObj.rain):
+                self.rating = "MODERATE"
+                self.rating2 = "; Be prepared for rain"
+                self.weatherEmoji = "🌧️☔"
+            elif (self.weatherObj.windy or self.weatherObj.weatherStatus == "windy"):
+                self.rating = "MODERATE"
+                self.rating2 = "; It's windy"
+            else:
+                self.rating = "OPTIMAL"
+                self.weatherEmoji = "🚴👍"
+        elif (self.weatherObj.tempStatus in ["pleasant temps","warm"]):
+            if (self.weatherObj.rain):
+                self.rating = "MODERATE"
+                self.rating2 = "; Be prepared for rain"
+                self.weatherEmoji = "🌧️☔"
+            else:
+                self.rating = "OPTIMAL"
+                self.weatherEmoji = "🚴👍"
+        elif (self.weatherObj.tempStatus == "very warm"):
+            if (self.weatherObj.rain):
+                self.rating = "MODERATE"
+                self.rating2 = "; Be prepared for rain"
+                self.weatherEmoji = "🌡️☔"
+            else:
+                self.rating = "OPTIMAL"
+                self.rating2 = ", but it's hot"
+                self.weatherEmoji = "🌡️☀️"
+        else:
+            self.rating = "NOT SURE(?)"
+            self.weatherEmoji = "❔"
+        if (self.weatherObj.unseasonablyWarm):
+            self.weatherObj.tempStatus = "unseasonably warm"
+        ratingList = [self.rating, self.rating2, self.weatherEmoji]
+        return ratingList
     def recommendAttire(self):
         #assign self.attire string
         """
         this and makeRecommendation() are evaluating some of the same things, but having
         two separate functions is much cleaner and more readable
         """
-        if (self.rain or self.snow):
+        if (self.weatherObj.rain or self.weatherObj.snow):
             #attire must be waterproof
-            if (self.tempStatus in ["bitter cold", "frigid", "cold"]):
+            if (self.weatherObj.tempStatus in ["bitter cold", "frigid", "cold"]):
                 self.attire = "Waterproof winter jacket/gloves"
-            elif (self.tempStatus == "brisk"):
+            elif (self.weatherObj.tempStatus == "brisk"):
                 self.attire = "Waterproof medium jacket"
             else: 
                 self.attire = "Waterproof light jacket"
         else:
             #if dry
-            if (self.tempStatus in ["bitter cold", "frigid", "cold"]):
+            if (self.weatherObj.tempStatus in ["bitter cold", "frigid", "cold"]):
                 self.attire = "Winter jacket/gloves"
-            elif (self.tempStatus == "brisk"):
+            elif (self.weatherObj.tempStatus == "brisk"):
                 self.attire = "Medium jacket"
-            elif (self.tempStatus == "mild"):
+            elif (self.weatherObj.tempStatus == "mild"):
                 self.attire = "Light jacket"
             else:
-                self.attire = "Summer attire"
-    def makeRecommendation(self):
-        if (self.snow):
-            self.rating = "PROBABLY NOT"
-            self.rating2 = "; Be prepared for snow"
-            self.weatherEmoji = "⛄❄️"
-        elif (self.snowy):
-            self.rating = "PROBABLY NOT"
-            self.rating2 = "; Roads are likely messy"
-            self.weatherEmoji = "⛄❄️"
-        elif (self.weatherStatus in ["extreme weather"]):
-            self.rating = "NO"
-            self.weatherEmoji = "⚡❕"
-        elif (self.tempStatus == "bitter cold"):
-            self.rating = "PROBABLY NOT"
-            self.rating2 = "; Only for diehards"
-            self.weatherEmoji = "⛄❄️"
-        elif (self.tempStatus in ["cold", "frigid"]):
-            if (self.rain):
-                self.rating = "PROBABLY NOT"
-                self.rating2 = "; Be prepared for rain"
-                self.weatherEmoji = "⛄❄️"
-            else:
-                if (self.unseasonablyWarm and self.weatherStatus != "frigid"):
-                    self.rating = "PROBABLY"
-                    self.rating2 = "; Enjoy the warmth"
-                    self.weatherEmoji = "🚴🌡️"
+                self.attire = "Whatever you want"
+        return self.attire
+
+class TweetPublisher(object): 
+    def __init__(self, tweetContents, images=None):
+        self.tweetContents = tweetContents
+        if (images):
+            self.images = images
+        else:
+            self.images = None
+            #necessary?
+        self.tweetError = False
+        self.publishTweet()
+    def publishTweet(self):
+        print(self.tweetContents)
+        if(PUBLISH):
+            try:
+                twitter = ExternalConnection.getInstance().returnTwitterConnection()
+                if (self.images):
+                    media_ids = []
+                    for filename in self.images:
+                        res = twitter.media_upload(filename)
+                        media_ids.append(res.media_id)
+                    twitter.update_status(status=self.tweetContents, media_ids=media_ids)
                 else:
-                    self.rating = "MAYBE"
-                    self.rating2 = "; Be prepared for cold"
-                    self.weatherEmoji = "⛄❄️"
-        elif (self.tempStatus == "brisk"): 
-            if (self.rain):
-                self.rating = "PROBABLY NOT"
-                self.rating2 = "; Be prepared for rain"
-                self.weatherEmoji = "🌧️☔"
-            else:
-                if (self.windy or self.weatherStatus == "windy"):
-                    self.rating = "MAYBE"
-                    self.rating2 = "; It's windy"
-                    self.weatherEmoji = "🌬️"
-                else:
-                    self.rating = "YES"
-                    self.rating2 = ", you should"
-                    self.weatherEmoji = "🚴👍"
-        elif (self.tempStatus in ["mild"]):
-            if (self.rain):
-                self.rating = "MAYBE"
-                self.rating2 = "; Be prepared for rain"
-                self.weatherEmoji = "🌧️☔"
-            elif (self.windy or self.weatherStatus == "windy"):
-                self.rating = "MAYBE"
-                self.rating2 = "; It's windy"
-            else:
-                self.rating = "YES"
-                self.rating2 = ", you should"
-                self.weatherEmoji = "🚴👍"
-        elif (self.tempStatus in ["pleasant temps","warm"]):
-            if (self.rain):
-                self.rating = "MAYBE"
-                self.rating2 = "; Be prepared for rain"
-                self.weatherEmoji = "🌧️☔"
-            else:
-                self.rating = "YES"
-                self.rating2 = ", you should"
-                self.weatherEmoji = "🚴👍"
-        elif (self.tempStatus == "very warm"):
-            if (self.rain):
-                self.rating = "MAYBE"
-                self.rating2 = "; Be prepared for rain"
-                self.weatherEmoji = "🌡️☔"
-            else:
-                self.rating = "YES"
-                self.rating2 = ", but it's hot"
-                self.weatherEmoji = "🌡️☀️"
-        else:
-            self.rating = "NOT SURE(?)"
-            self.weatherEmoji = "❔"
-class SunTimes(object):
-    def __init__(self, Weather):
-        self.WeatherObj = Weather
-        self.airport = self.WeatherObj.airport
-        self.today = self.WeatherObj.today
-        self.forecastTime = self.WeatherObj.forecastTime
-        self.sunriseTime = ""
-        self.sunsetTime = ""
+                    twitter.update_status(self.tweetContents)
+                    print("\nTweet successfully published")
+            except:
+                print("\nTweet not successfully published")
+                self.tweetError = True
 
-    def parseJSON(self, url, string):
-        response = urllib.request.urlopen(url)
-        JSONdata = json.loads(response.read())
-        if (string in JSONdata):   
-           return (JSONdata[string])
-        else:
-           return None
+    def log(self):
+        self.publishAttemptTime = datetime.now(pytz.timezone('US/Eastern'))
+        contents = [("WANup =" + str(self.WANup)), ("tweetAttemptTime =" + str(self.publishAttemptTime))]
+        if(self.WANup == True):
+            contents += [("wind= " + self.weatherObj.windString), ("rain= " + str(self.weatherObj.rainText)), 
+                   ("rating= " + self.weatherObj.rating), ("rating2= " + self.weatherObj.rating2), ("forecastTime= " + str(self.weatherObj.forecastTime)), 
+                   ("today= " + str(self.weatherObj.today)), ("mornTemp= " + str(self.weatherObj.mornTemp)), 
+                   ("eveTemp =" + str(self.weatherObj.eveTemp)), ("tempStatus= " + str(self.weatherObj.tempStatus)), ("weatherStatus= " + str(self.weatherObj.weatherStatus)), 
+                   ("attire =" + self.weatherObj.attire), ("tweetLength =" + str(self.tweetLength)), ("tweetError =" + str(self.tweetError))]
+        outputFile = open(LOGPATH, 'a')
+        outputWriter = csv.writer(outputFile)
+        outputWriter.writerow(contents)
+        outputFile.close()
 
-    def formatTime(self, time):
-        formattedTime = datetime.strptime(time,"%H:%M:%S %p")
-        formattedTime = formattedTime.strftime('%#H:%M')
-        return formattedTime
-   
-    def getSunTimes(self):
-        URL = "https://apps.tsa.dhs.gov/MyTSAWebService/GetEventInfo.ashx?&output=json&airportcode=" + self.airport
-        sunriseURL = URL + "&eventtype=sunrise"
-        sunsetURL = URL + "&eventtype=sunset"
-        if (not self.today):
-            APIDateString = "&eventdate=" + f"{self.forecastTime:%m/%d/%y}"
-            sunriseURL += APIDateString
-            sunsetURL += APIDateString
-        try:
-            self.sunriseTime = self.parseJSON(sunriseURL, "Sunrise")
-            self.sunsetTime = self.parseJSON(sunsetURL, "Sunset")
-            self.sunriseTime = self.formatTime(self.sunriseTime)
-            self.sunsetTime = self.formatTime(self.sunsetTime)
-        except:
-            #keep self.sunriseTime and self.sunsetTime empty
-            pass
-        return self.sunriseTime, self.sunsetTime
+class TweetJob(object):
+    def __init__(self, argument, tweetTime):
+        self.argument, self.tweetTime = argument, tweetTime
+        self.truncationAttempted = False
+        self.punctuation = ""    
+        self.tweetContents = ""
+        self.weekend = False
+        self.tk = TimeKeeper.getInstance()
+        self.processJobs()
+        #declare suntimes variables 
+    def processJobs(self):
+        
+        if (self.argument == "AMTweet"):
+            self.tk.schedule(self.AMTweet, self.tweetTime) 
+        elif (self.argument == "PMTweet"):
+            self.tk.schedule(self.PMTweet, self.tweetTime)
+        elif (self.argument == "WeekendTweet"):
+            self.tk.schedule(self.WeekendTweet, self.tweetTime)
+        elif (self.argument == "WeekTweet"):
+            self.tk.schedule(self.WeekTweet, self.tweetTime)
+        elif (self.argument == "ImageTweet"):
+            self.tk.schedule(self.ImageTweet, self.tweetTime)
+        elif (self.argument == "TestTweet"):
+            self.tk.schedule(self.TestTweet, self.tweetTime)
+        print("Successfully scheduled " + self.argument)
+    def AMTweet(self):
+        self.weatherObj = Weather(GPSLOCATION, AIRPORT)
+        self.rec = Recommendation(self.weatherObj)
+        self.formTweet()
+        TweetPublisher(self.tweetContents)
+    def PMTweet(self):
+        self.weatherObj = Weather(GPSLOCATION, AIRPORT, 1)
+        self.rec = Recommendation(self.weatherObj)
+        self.formTweet()
+        TweetPublisher(self.tweetContents)
+    def WeekTweet(self):
+        self.weatherList = []
+        tempTweet = ""
+        for x in range (1,6):
+            self.weatherObj = Weather(GPSLOCATION, AIRPORT, x)
+            self.rec = Recommendation(self.weatherObj)
+            self.weatherList.append(self.weatherObj)
+            tempTweet += self.weatherObj.dayofWeek["short"] + "- " + str(self.rec.rating) + "/" 
+            tempTweet += self.weatherObj.weatherStatus + "/Morn " + str(math.ceil(self.weatherObj.mornTemp)) + "°F/Eve " + str(math.ceil(self.weatherObj.eveTemp)) + "°F\n"
+        self.tweetContents = "THIS WEEK'S CONDITIONS:\n" + tempTweet
+        TweetPublisher(self.tweetContents)
+    def WeekendTweet(self):
+        self.weatherList = []
+        self.tempTweet = "THIS WEEKEND: "
+        for x in range (1,3):
+            #Not ready
+            #Way too long. Get rid of redundant text - "Forecast, looks like", suntimes, emojis, rating2
+            #print text error if too long
+            self.Weekend = True
+            self.weatherObj = Weather(GPSLOCATION, AIRPORT, x)
+            self.rec = Recommendation(self.weatherObj)
+            self.formTweet()
+            self.tempTweet += "Internal Count " + str(x) + "\n" + self.tweetContents
+        self.tweetContents = self.tempTweet
+        TweetPublisher(self.tweetContents)
+    def ImageTweet(self):
+        # This was turned off. It should be triggered in the PM if the weather is currently shit, or if it WAS shit during the AM
+        images = Images(IMAGES_TO_PULL)
+        self.paths = []
+        self.tweetContents= "Current views of "
+        
+        for items in IMAGES_TO_PULL[:-1]:
+            self.tweetContents += items.description + ", "
+            self.paths.append(items.localPath)
+        self.tweetContents += images.downloadJobs[-1].description + ". Via DOT traffic camera feeds."
+        self.paths.append(images.downloadJobs[-1].localPath)
+        self.images = self.paths
+        TweetPublisher(self.tweetContents, self.images)
 
-class Tweet(object):
-    def __init__(self, Weather, tweetTime):
-        self.logPath = 'C:\\shouldibike\\templog.csv'
-        if(self.WANtest()):      
-            #test connectivity
-            #set attributes
-            auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
-            auth.set_access_token(ACCESS_TOKEN, ACCESS_SECRET)
-            self.api = tweepy.API(auth)
-            self.tweetTime = 0
-            self.weatherObj = Weather
-            #self.followerList = []
-            self.tweetError = False
-            self.tweetLength = 0
-            self.publishAttemptTime = 0
-            self.tweetContents = ""
-            self.schedulePublish(tweetTime)
+    def recommendation(self):
+        self.rec = Recommendation(self.weatherObj)
+        #import variables here
+        #type that shit out
+    def printTweet(self):
+        print(self.tweetContents)
+
+    #imported from old class, to merge in
+    def todayStatus(self):
+        self.tweetContents = self.rec.rating  
+        if (self.rec.rating2):
+            self.tweetContents += self.rec.rating2 + self.punctuation
         else:
-            print("\nCannot initialize object. WAN down. Logging failure.")
-            self.log()
-            sys.exit()
+            self.tweetContents += self.punctuation
+        self.tweetContents += " Today's " 
+    
+    def tomorrowStatus(self):
+        self.tweetContents += self.weatherObj.dayofWeek["long"].upper() + ": Looks like " + self.rec.rating      
+        if (self.rec.rating2):
+            self.tweetContents += self.rec.rating2
+        self.tweetContents += self.punctuation + " Forecast: "
+
     def formTweet(self):
-        if (self.weatherObj.unseasonablyWarm):
-            self.weatherObj.tempStatus = "unseasonably warm"
-        if (self.weatherObj.rating == "YES"):
-            punctuation = "!"
+        if (self.rec.rating == "OPTIMAL"): #=="YES:
+            self.punctuation = "."
         else:
-            punctuation = "."
+            self.punctuation = "."
         if (self.weatherObj.today):
             #tweet current day's conditions
-            self.tweetContents = self.weatherObj.rating
-            
-            if (self.weatherObj.rating2):
-                self.tweetContents += self.weatherObj.rating2 + punctuation
-            else:
-                self.tweetContents += punctuation
-            self.tweetContents += " Today's "      
+            self.todayStatus()  
         else:
-            #tweet for Tomorrow
-            self.tweetContents += "TOMORROW: Looks like " + self.weatherObj.rating 
-            
-            if (self.weatherObj.rating2):
-                self.tweetContents += self.weatherObj.rating2
-            self.tweetContents += punctuation + " Forecast: "
+            #tweet for future date
+            self.tomorrowStatus()
         self.tweetContents += self.weatherObj.tempStatus 
         
         #if rain or snow doesn't exist, print weather status
         if (not self.weatherObj.rain and not self.weatherObj.snow):
             self.tweetContents += "/" + self.weatherObj.weatherStatus
-        #if raintweet or snowtweet exist (ie some rain, no rain, NOT trace rain OR some snow, NOT flurries) exists, print raintweet and/or snowtweet (if winter)
-        if ((self.weatherObj.rainTweet) and (self.weatherObj.weatherStatus != "trace rain")):
-            self.tweetContents += "/" + self.weatherObj.rainTweet
+        #if rainText or snowtweet exist (ie some rain, no rain, NOT trace rain OR some snow, NOT flurries) exists, print rainText and/or snowtweet (if winter)
+        if ((self.weatherObj.rainText) and (self.weatherObj.weatherStatus != "trace rain")):
+            self.tweetContents += "/" + self.weatherObj.rainText
         if ((self.weatherObj.snowTweet) and self.weatherObj.weatherStatus != "flurries" and self.weatherObj.winter):
             self.tweetContents += "/" + self.weatherObj.snowTweet
         self.tweetContents += "/" + self.weatherObj.windString + ". " + "Morning " + str(math.ceil(self.weatherObj.mornTemp)) + "°F/Evening " 
         self.tweetContents += str(math.ceil(self.weatherObj.eveTemp)) + "°F/" 
-        if (self.weatherObj.sunriseTime):
+        if (self.weatherObj.sunriseTime and self.weatherObj.sunsetTime):
             self.tweetContents += "Sunrise " + str(self.weatherObj.sunriseTime) + "/Sunset " + str(self.weatherObj.sunsetTime) + " "
  
         # Append weatherEmoji
-        if(self.weatherObj.weatherEmoji):
-            self.tweetContents += self.weatherObj.weatherEmoji
+        if(self.rec.weatherEmoji):
+            self.tweetContents += self.rec.weatherEmoji
         if(self.weatherObj.today):
             if (self.weatherObj.winterRoadConditions):
                 self.tweetContents += self.weatherObj.winterRoadConditions
-            if (self.weatherObj.attire):
-                self.tweetContents += "\nWear: " + self.weatherObj.attire
-            subway = Subway()
+            if (self.rec.attire):
+                self.tweetContents += "\nWear: " + self.rec.attire
+            subway = Subway.Subway()
             if(subway.apiUp):
                 self.tweetContents += subway.printStatus() + " "
         self.tweetLength = len(self.tweetContents)
+        
         if (self.tweetLength <= 261):
             self.tweetContents += "\n#bikenyc"
-            self.tweetLength = len(self.tweetContents)        
+            self.tweetLength = len(self.tweetContents)
+        
+        if (self.tweetLength > 270 and not self.truncationAttempted):
+            self.truncate()
+            self.truncationAttempted = True
+            self.formTweet()
 
     def truncate(self):
         self.tweetContents = ""
         self.weatherObj.weatherEmoji = ""
         if(self.tweetLength > 276):
-            self.weatherObj.rating2 = ""
-   
-    def printTweet(self):
-        print(self.tweetContents)
-   
-    def followBack(self):
-        for follower in tweepy.Cursor(self.api.followers).items():
-            try:            
-                follower.follow()
-            except:
-                print("\nCouldn't follow " + follower.screen_name)
-            else:
-                print("\nFollowed " + follower.screen_name)
+            self.rec.rating2 = ""
 
-    def updateStatus(self):
-        try:
-            self.api.update_status(self.tweetContents)
-            print("\nTweet successfully published")
-        except:
-            print("\nTweet not successfully published")
-            self.tweetError = True
+class ExternalConnection(object):
+    __instance = None
+    @staticmethod
+    def getInstance():
+        if ExternalConnection.__instance == None:
+            ExternalConnection()
+        return ExternalConnection.__instance
+    def __init__(self):
+        if ExternalConnection.__instance !=None:
+            raise Exception ("This class is a singleton")
+        else:
+            ExternalConnection.__instance = self
+            self.api = ""
+            self.TweetAPIConnect()
+            self.pyOWMConnect()
+    def TweetAPIConnect(self):
+        auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
+        auth.set_access_token(ACCESS_TOKEN, ACCESS_SECRET)
+        self.api = tweepy.API(auth)
+        print("\nSuccessfully connected to Twitter API.\n")
+        #needs a disconnect
+    def pyOWMConnect(self):
+        #initialize OWM object with API key
+        self.owm = pyowm.OWM(OWM_KEY)
+        print("\nSuccessfully connected to PYOWM API.")
     def pingTest(self):
         #this will ping infinitely on linux without the -c parameter
         hostname = "twitter.com"
@@ -515,149 +651,88 @@ class Tweet(object):
         return isUp
     def WANtest(self):
         #run pingTest up to maxTries. return result of pingTest
-        self.WANup = False
+        WANup = False
         tryCount = 1
         maxTries = 10
-        while(self.WANup == False and tryCount <= maxTries):
+        waitTime = 5
+        while(WANup == False and tryCount <= maxTries):
             if(self.pingTest()):
                 #test connectivity
-                self.WANup = True
+                WANup = True
                 if(tryCount > 1):
                     print("\nWAN was down, but was restored.")
-                return self.WANup
+                return WANup
             else:
-                waitTime = 5
                 print("\nWAN down. Try " + str(tryCount) + " failed. Waiting " + str(waitTime) + " seconds to retry.")
                 time.sleep(waitTime)
                 tryCount +=1
                 if(tryCount > maxTries):
                     print("\nMax tries attempted.")
-                    return self.WANup
-    def publish(self):
-        self.weatherObj.updateWeather()
-        self.formTweet()
-        if (self.tweetLength > 270):
-            self.truncate()
-            self.formTweet()
-        self.updateStatus()     
-        self.printTweet()
-        #self.followBack()
-        self.log()
-    def schedulePublish(self, time1):
-        schedule.every().day.at(time1).do(self.publish)
-        print("\nWaiting for scheduled time (" + str(time1) + ")...\n")     
-    def log(self):
-        self.publishAttemptTime = datetime.now(pytz.timezone('US/Eastern'))
-        contents = [("WANup =" + str(self.WANup)), ("tweetAttemptTime =" + str(self.publishAttemptTime))]
-        if(self.WANup == True):
-            contents += [("wind= " + self.weatherObj.windString), ("rain= " + str(self.weatherObj.rainTweet)), 
-                   ("rating= " + self.weatherObj.rating), ("rating2= " + self.weatherObj.rating2), ("forecastTime= " + str(self.weatherObj.forecastTime)), 
-                   ("today= " + str(self.weatherObj.today)), ("mornTemp= " + str(self.weatherObj.mornTemp)), 
-                   ("eveTemp =" + str(self.weatherObj.eveTemp)), ("tempStatus= " + str(self.weatherObj.tempStatus)), ("weatherStatus= " + str(self.weatherObj.weatherStatus)), 
-                   ("attire =" + self.weatherObj.attire), ("tweetLength =" + str(self.tweetLength)), ("tweetError =" + str(self.tweetError))]
-        outputFile = open(self.logPath, 'a')
-        outputWriter = csv.writer(outputFile)
-        outputWriter.writerow(contents)
-        outputFile.close()
-
-class Subway(object):
+                    return WANup
+    def returnTwitterConnection(self):
+        return self.api
+    def returnOWMConnection(self):
+        return self.owm
+class TimeKeeper(object):
+    #singleton wrapper
+    __instance = None
+    @staticmethod
+    def getInstance():
+        """ Static access method """
+        if TimeKeeper.__instance == None:
+            TimeKeeper()
+        return TimeKeeper.__instance
     def __init__(self):
-        self.url = "http://web.mta.info/status/serviceStatus.txt"
-        self.apiUp = False
-        self.delays = []
-        self.goodService = []
-        self.plannedWork = []
-        self.serviceChange = []
-        self.text = ""
-        self.pullData()
-    def pullData(self):
-        try:
-            response = urllib.request.urlopen(self.url)
-            tree = ET.parse(response)
-            root = tree.getroot()     
-            for x in range(0,10):
-                if("GOOD SERVICE" in (root[2][x][1].text)):
-                    self.goodService.append(str(root[2][x][0].text))
-                elif("PLANNED WORK" in (root[2][x][1].text)):
-                    self.plannedWork.append(str(root[2][x][0].text))
-                elif("DELAYS" in (root[2][x][1].text)):
-                    self.delays.append(str(root[2][x][0].text))
-                elif("SERVICE CHANGE" in (root[2][x][1].text)):
-                    self.serviceChange.append(str(root[2][x][0].text))
-            self.apiUp = True
-        except:
-            self.apiUp = False
-    def printStatus(self):
-        def interpret(keyword, string):
-            if(keyword):
-                self.text += string + "- "
-                max = len(keyword) -1
-                for index, f in enumerate(keyword):
-                    self.text += f
-                    if(index != max):
-                        self.text += "/"
-                    else:
-                        self.text += ". "           
-        if(self.apiUp):
-            self.text += "\nMTA: "
-            interpret(self.delays, "Delays")
-            interpret(self.plannedWork, "Track Work")
-            interpret(self.serviceChange, "Service Change")
-            interpret(self.goodService, "Good Service")
-        return self.text
-class RoadConditions(object):
-    def __init__(self):
-        self.url = "https://511ny.org/api/getwinterroadconditions?key=" + NY511_KEY + "&format=xml"
-        self.wet = False
-        self.snowy = False
-        self.text = ""
-        self.pullData()
-    def pullData(self):
-        try:
-            response = urllib.request.urlopen(self.url)
-            tree = ET.parse(response)
-            root = tree.getroot()
-                
-            for item in root:
-                if "NYC" in item[1].text:
-                    if ("Wet" in item[0].text):
-                        self.wet = True
-                        break
-                    if ("Snow" in item[0].text):
-                        self.snowy = True
-                        break
-        except:
-            self.wet = None
-            self.snowy = None
-            self.text = ""
+        if TimeKeeper.__instance != None:
+            raise Exception ("This class is a singleton")
+        else:
+            TimeKeeper.__instance = self
+            self.dateandtime = ""
+            self.updateTime()
+            self.dayOfWeek()
+            
+    def updateTime(self):
+        self.dateandtime = datetime.now(pytz.timezone('US/Eastern'))
 
-        if (self.wet != None):
-            self.text = "\nMajor Roads: Currently "
-            if(self.wet and self.snowy):
-                self.text += "wet/snow/ice"
-            elif(self.wet):
-                self.text += "wet"
-            elif(self.snowy):
-                self.text += "snow/ice"
-            else:
-                self.text += "dry"   
+    def dayOfWeek(self):
+        dayMapLong = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        dayMapShort = ["Mon", "Tues", "Wed", "Thurs", "Fri", "Sat", "Sun"]
+        self.dayofWeek = {}
+        self.dayofWeek["short"] = dayMapShort[self.dateandtime.weekday()]
+        self.dayofWeek["long"] = dayMapLong[self.dateandtime.weekday()]
+        return self.dayofWeek
 
-currentWeather = Weather([40.713, -74.006], "LGA", "7:15")
-#maybe there should be a separate function for AM Tweet and PM Tweet
-tomorrowWeather = Weather([40.713, -74.006], "LGA", "17:30", 1)
-
-#maybe should implement separate URLhandler class, with pingtest, parseJSON, and others
-
-#This program currently is run via an external task scheduler every day, and terminates after the second tweet.
-currentTime = datetime.now(pytz.timezone('US/Eastern'))
-while (currentTime.hour < 18):
+    def schedule(self, job, time1):
+        schedule.every().day.at(time1).do(job)
+        print("\nWaiting for scheduled time (" + str(time1) + ")...\n") #print name of job 
+    def runJobs(self):
+        print("Scheduler started at " + str(self.dateandtime) + ".")
+        while (self.dateandtime.hour < EXITTIME):
             schedule.run_pending()
             time.sleep(20) # wait 20 sec
-            currentTime = datetime.now(pytz.timezone('US/Eastern'))
-sys.exit()
+            self.updateTime()
+        print("Exit hour of " + str(EXITTIME) + " reached at " + str(self.dateandtime) + ", program exiting.")
+        sys.exit()
+        
+#MAIN GOES HERE
+#weekend should not use commute times for formulation. should include peak of day
+timekeeper = TimeKeeper()
+externalconnection = ExternalConnection()
+
+TweetJob("AMTweet", AMTWEETTIME)
+if (timekeeper.dayofWeek["long"] in ["Friday"]):
+    TweetJob("WeekendTweet", PMTWEETTIME)
+elif (timekeeper.dayofWeek["long"] in ["Sunday"]):
+    TweetJob("WeekTweet", PMTWEETTIME)
+else:
+    TweetJob("PMTweet", PMTWEETTIME)
+TweetJob("ImageTweet", AMTWEETTIME)
+timekeeper.runJobs()
+
+
+
 
     
-        
 
  
 
