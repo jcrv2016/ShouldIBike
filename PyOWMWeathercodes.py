@@ -1,4 +1,7 @@
 #weatherCodes
+#refer to owm documentation for more info on these codes
+#https://openweathermap.org/weather-conditions
+
 rainCodes = ["rain", 200, 201, 202, 210, 211, 212, 221, 230, 231, 232, 302, 312, 313, 314, 501, 502, 503, 504, 511, 522, 531, 901, 906, 960]
 lightRainCodes = ["light rain", 300, 301, 302, 310, 311, 321, 500, 520, 521, 701]
 snowyCodes = ["snow", 600, 601, 602, 611, 612, 615, 616, 620, 621, 622]
