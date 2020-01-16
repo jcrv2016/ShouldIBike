@@ -40,8 +40,12 @@ class Recommendation(object):
                     self.weatherEmoji = "🚴🌡️"
                 else:
                     self.rating = "MODERATE"
-                    self.rating2 = "; Be prepared for cold"
-                    self.weatherEmoji = "⛄❄️"
+                    if (self.weatherObj.windy or self.weatherObj.weatherStatus == "windy"):
+                        self.rating2 = "; Be prepared for cold and wind"
+                        self.weatherEmoji = "⛄🌬️"
+                    else:
+                        self.rating2 = "; Be prepared for cold"
+                        self.weatherEmoji = "⛄❄️"
         elif (self.weatherObj.tempStatus == "brisk"): 
             if (self.weatherObj.rain):
                 self.rating = "POOR"
