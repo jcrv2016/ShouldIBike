@@ -19,7 +19,7 @@ class Weather(object):
 		self.attire = ""
 		#rain-related attributes
 		self.littleRain = False
-		self.someRain = False
+		self.heavyRain = False
 		self.rainText = ""
 		self.rain = False
 		#snow-related attributes
@@ -71,6 +71,7 @@ class Weather(object):
 		self.unseasonablyWarm = False
 		self.unseasonablyCold = False
 		self.elapsedDays = 0
+		self.lowDiurnalRange = False
 		self.update()
  
 	def update(self): 
@@ -123,7 +124,7 @@ class Weather(object):
 				snow = self.weatherReading.get_snow() 
 				if 'all' in snow:
 					snowStatus = snow['all']
-					if (snowStatus >= 2.5):
+					if (snowStatus >= 6.35):
 						snowStatus = self.mmToIn(snowStatus)
 						snowStatus = "{:.1f}".format(snowStatus) 
 						self.snowTweet = snowStatus + '" snow'
@@ -173,17 +174,23 @@ class Weather(object):
 		self.loTemp = temperature['min']
 		self.avgTemp = ((self.hiTemp + self.loTemp)/2)
 		self.avgCommuteTemp = ((self.mornTemp + self.eveTemp)/2)
+		self.lowDiurnalRange = True if (abs(self.eveTemp - self.mornTemp) < 10) else False
 		
 	def getRain(self):
 		if (self.weatherReading.get_rain()): 
 			rain = self.weatherReading.get_rain() 
 			if ('all' in rain):
 				rainStatus = rain['all']
-				rainCutoff = 7.62
-				if (rainStatus > rainCutoff):
+				traceRainCutoff = 7.62
+				heavyRainCutoff = 18
+
+				if (traceRainCutoff < rainStatus < heavyRainCutoff):
 					self.rainText = format(self.mmToIn(rainStatus), '.1f') + '" rain'
-					self.someRain = True
 					self.rain = True
+				elif (rainStatus >= heavyRainCutoff):
+					self.rainText = format(self.mmToIn(rainStatus), '.1f') + '" rain'
+					self.rain = True
+					self.heavyRain = True
 				else:
 					self.littleRain = True
 					self.rain = False
@@ -193,7 +200,7 @@ class Weather(object):
 			self.rain = False
 	  
 	def interpretWeatherCode(self):
-		#pull weather code and make human-readable
+		#pull weather code and make hghghghuman-readable
 		#listing of weather codes is here: https://openweathermap.org/weather-conditions
 		#future changes:
 		#sunny would be more descriptive than clear in applicable cases
@@ -222,7 +229,12 @@ class Weather(object):
 			else:
 				self.snow = True
 	def interpretTemp(self):
-		if (self.avgCommuteTemp < 18):
+
+		if self.hiTemp < 25:
+			self.tempStatus = "bitter cold"
+		elif self.hiTemp >= 86:
+			self.tempStatus = "hot"
+		elif (self.avgCommuteTemp < 18):
 			self.tempStatus = "bitter cold"
 		elif (18 <= self.avgCommuteTemp < 26):
 			self.tempStatus = "frigid"
@@ -230,14 +242,17 @@ class Weather(object):
 			self.tempStatus = "cold"
 		elif (41 <= self.avgCommuteTemp < 52):
 			self.tempStatus = "brisk"
-		elif (52 <= self.avgCommuteTemp < 65):
+		elif (52 <= self.avgCommuteTemp < 64):
 			self.tempStatus = "mild"
-		elif (65 <= self.avgCommuteTemp < 74):
+		elif (64 <= self.avgCommuteTemp < 73):
 			self.tempStatus = "pleasant temps"
-		elif (74 <= self.avgCommuteTemp < 84):
+		elif (73 <= self.avgCommuteTemp <= 79):
 			self.tempStatus = "warm"
-		elif (self.avgCommuteTemp >= 84):
-			self.tempStatus = "hot"
+		elif (self.avgCommuteTemp > 79):
+			if self.lowDiurnalRange:
+				self.tempStatus = "warm"
+			else:
+				self.tempStatus = "hot"
 		else:
 			self.tempStatus = "undeclared"
 

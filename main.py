@@ -1,11 +1,21 @@
 #Original Modules below, please make sure they're in right dir and importable
+
 from ExternalConnection import ExternalConnection
 from Tweet import TweetJob
 from TimeKeeper import TimeKeeper
 
+import sys
+
 #Global, easy to find VIP variables
-AMTWEETTIME = "07:40"
-PMTWEETTIME = "17:00"
+#Get command-line times, if they exist
+
+if (sys.argv[1], sys.argv[2]):
+	AMTWEETTIME = sys.argv[1]
+	PMTWEETTIME = sys.argv[2]
+else:
+	AMTWEETTIME = "07:40"
+	PMTWEETTIME = "17:00"
+
 
 """
 model - call TimeKeeper*Singleton* to count time

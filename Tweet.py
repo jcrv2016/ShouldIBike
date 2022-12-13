@@ -2,7 +2,7 @@ import math
 import ExternalConnection, Images, Recommendation, Subway, TimeKeeper
 from Weather import Weather
 
-IMAGES_TO_PULL = ["http://207.251.86.238/324", "MhnBrEntr", "Manhattan Bridge Entrance"], ["http://207.251.86.238/cctv14.jpg", "BKBr3", "Brooklyn Bridge Path"], ["http://207.251.86.238/361", "wbbBrEntr", "Williamsburg Bridge Entrance"]
+IMAGES_TO_PULL = ["https://jpg.nyctmc.org/324.jpg", "MhnBrEntr", "Manhattan Bridge Entrance"], ["https://jpg.nyctmc.org/14.jpg", "BKBr3", "Brooklyn Bridge Path"], ["https://511ny.org/map/Cctv/4616625--17", "qbbPath", "Queensboro Bridge Path"], ["https://511ny.org/map/Cctv/4616622--17", "qbbEntr", "Queensboro Bridge Queens Entrance"]
 GPSLOCATION = [40.79, -73.96]
 AIRPORT = "LGA"
 PUBLISH = True

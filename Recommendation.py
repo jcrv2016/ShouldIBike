@@ -11,14 +11,18 @@ class Recommendation(object):
     
     def makeRecommendation(self):
         # this could be a more maintainable and readable lookup matrix somehow
-        if (self.weatherObj.snow):
+        if self.weatherObj.heavyRain:
+            self.rating = "POOR"
+            self.rating2 = "; Be prepared for substantial rain"
+            self.weatherEmoji = "🌧️☔"
+        elif self.weatherObj.snow:
             self.rating = "POOR"
             if (self.weatherObj.rain):
                 self.rating2 = "; Be prepared for snow/rain"
             else:
                 self.rating2 = "; Be prepared for snow"
             self.weatherEmoji = "⛄❄️"
-        elif (self.weatherObj.snowy):
+        elif self.weatherObj.snowy:
             self.rating = "POOR"
             self.rating2 = "; Roads are likely messy"
             self.weatherEmoji = "⛄❄️"
@@ -61,7 +65,7 @@ class Recommendation(object):
                     self.rating2 = ", you should"
                     self.weatherEmoji = "🚴👍"
         elif (self.weatherObj.tempStatus in ["mild"]):
-            if (self.weatherObj.rain):
+            if self.weatherObj.rain:
                 self.rating = "MODERATE"
                 self.rating2 = "; Be prepared for rain"
                 self.weatherEmoji = "🌧️☔"
@@ -80,13 +84,12 @@ class Recommendation(object):
                 self.rating = "OPTIMAL"
                 self.weatherEmoji = "🚴👍"
         elif (self.weatherObj.tempStatus == "hot"):
+            self.rating = "MODERATE"
             if (self.weatherObj.rain):
-                self.rating = "MODERATE"
-                self.rating2 = "; Be prepared for rain"
+                self.rating2 = "; Be prepared for heat/rain"
                 self.weatherEmoji = "🌡️☔"
             else:
-                self.rating = "OPTIMAL"
-                self.rating2 = ", but it's hot"
+                self.rating2 = "; It's very hot"
                 self.weatherEmoji = "🌡️☀️"
         else:
             self.rating = "NOT SURE(?)"

@@ -12,7 +12,7 @@ class Image(object):
 		self.download()
 	def download(self):
 		try:
-			download = requests.get(self.url).content
+			download = requests.get(self.url, verify=False).content
 			#Protection to skip corrupt images -- test it's at least like 7 KB or so
 			if (len(download) >= MIN_FILE_SIZE):
 				currentTime = datetime.now().strftime("%m-%d-%y_%H%M")
